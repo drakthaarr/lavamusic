@@ -38,7 +38,7 @@ Installation & Setup
 
 2. Install Dependencies
 
-    pip install discord.py wavelink python-dotenv
+    pip install -r requirements.txt
 
 3. Configuration
 
