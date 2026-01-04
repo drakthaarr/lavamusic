@@ -37,21 +37,18 @@ Installation & Setup
     Python 3.8 or higher.
 
 2. Install Dependencies
-Bash
 
-pip install discord.py wavelink python-dotenv
+    pip install discord.py wavelink python-dotenv
 
 3. Configuration
 
-Create a .env file in the root directory and add your bot token:
-Code snippet
+    Create a .env file in the root directory and add your bot token:
 
-TOKEN=your_discord_bot_token_here
+    TOKEN=your_discord_bot_token_here
 
 4. Running the Bot
-Bash
 
-python main.py
+    python main.py
 
 Commands
 Command	Description
