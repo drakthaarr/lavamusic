@@ -645,15 +645,23 @@ class MusicCog(commands.Cog):
 # ─────────────────────────────────────────────
 #  Запуск
 # ─────────────────────────────────────────────
+
+# setup_hook вызывается ДО on_ready — команды регистрируются правильно
+@bot.event
+async def setup_hook():
+    music_cog = MusicCog(bot)
+    await bot.add_cog(music_cog)
+    # Запускаем подключение к нодам в фоне (они требуют wait_until_ready внутри)
+    bot.loop.create_task(music_cog.setup_nodes())
+    print("✅ Cog загружен, ноды подключаются...")
+
+
 @bot.event
 async def on_ready():
     print(f'Бот запущен: {bot.user}')
     print('------')
-    music_cog = MusicCog(bot)
-    await bot.add_cog(music_cog)
-    await music_cog.setup_nodes()
     await bot.change_presence(activity=discord.Game(name="a!help | a!play"))
-    print("✅ Все системы загружены.")
+    print("✅ Все системы готовы.")
 
 
 if TOKEN:
