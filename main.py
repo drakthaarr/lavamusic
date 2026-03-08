@@ -72,11 +72,17 @@ class MusicCog(commands.Cog):
     async def setup_nodes(self):
         await self.bot.wait_until_ready()
         nodes_data = [
-            {"id": "Jirayu-Node",  "uri": "http://lavalink.jirayu.net:13592",       "pwd": "youshallnotpass"},
-            {"id": "Hatry-Node",   "uri": "http://lavahatry4.techbyte.host:3000",   "pwd": "naig.is-a.dev"},
-            {"id": "FreeLava-1",   "uri": "http://lavalink1.oops.wtf:80",           "pwd": "www.freelavalink.ga"},
-            {"id": "FreeLava-2",   "uri": "http://lavalink.lexnet.cc:2333",         "pwd": "lexn3tl@val!nk"},
-        ]
+                    {
+                    "id": "Hatry-Node",
+                    "uri": "http://lavahatry4.techbyte.host:3000",
+                    "pwd": "naig.is-a.dev"
+                    },
+                    {
+                    "id": "Jirayu-Node",
+                    "uri": "http://lavalink.jirayu.net:13592",
+                    "pwd": "youshallnotpass"
+                    },
+                ] 
         wavelink_nodes = [
             wavelink.Node(identifier=n["id"], uri=n["uri"], password=n["pwd"])
             for n in nodes_data
