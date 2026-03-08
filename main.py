@@ -72,18 +72,27 @@ class MusicCog(commands.Cog):
     async def setup_nodes(self):
         await self.bot.wait_until_ready()
         nodes_data = [
-            {"id": "Hatry-Node",  "uri": "http://lavahatry4.techbyte.host:3000",  "pwd": "naig.is-a.dev"},
-            {"id": "Jirayu-Node", "uri": "http://lavalink.jirayu.net:13592",      "pwd": "youshallnotpass"},
+            {"id": "Hatry-Node",   "uri": "http://lavahatry4.techbyte.host:3000",   "pwd": "naig.is-a.dev"},
+            {"id": "Jirayu-Node",  "uri": "http://lavalink.jirayu.net:13592",       "pwd": "youshallnotpass"},
+            {"id": "FreeLava-1",   "uri": "http://lavalink1.oops.wtf:80",           "pwd": "www.freelavalink.ga"},
+            {"id": "FreeLava-2",   "uri": "http://lavalink.lexnet.cc:2333",         "pwd": "lexn3tl@val!nk"},
         ]
         wavelink_nodes = [
             wavelink.Node(identifier=n["id"], uri=n["uri"], password=n["pwd"])
             for n in nodes_data
         ]
         print(f"🔄 Подключаемся к {len(wavelink_nodes)} серверам...")
-        try:
-            await wavelink.Pool.connect(nodes=wavelink_nodes, client=self.bot, cache_capacity=100)
-        except Exception as e:
-            print(f"Инициализация пула завершена: {e}")
+        connected = 0
+        for node in wavelink_nodes:
+            try:
+                await wavelink.Pool.connect(nodes=[node], client=self.bot, cache_capacity=100)
+                connected += 1
+            except Exception as e:
+                print(f"⚠️ Нода {node.identifier} недоступна: {e}")
+        if connected == 0:
+            print("❌ Ни одна нода не подключилась! Музыка работать не будет.")
+        else:
+            print(f"✅ Подключено нод: {connected}/{len(wavelink_nodes)}")
 
     # ── события ──────────────────────────────
 
@@ -201,7 +210,10 @@ class MusicCog(commands.Cog):
             await ctx.send(f"🎵 **{track.title}** — *{track.author}* добавлен в очередь.")
 
         if not player.playing:
-            await player.play(player.queue.get())
+            try:
+                await player.play(player.queue.get())
+            except Exception as e:
+                await ctx.send(f"❌ Не могу воспроизвести: `{e}`\nВозможно, нода Lavalink недоступна. Попробуй другой трек или подождите.")
 
     # ── playskip ─────────────────────────────
 
@@ -319,12 +331,15 @@ class MusicCog(commands.Cog):
 
     @commands.command(name='stop')
     async def stop(self, ctx):
-        """Остановить музыку и очистить очередь."""
+        """Остановить музыку, очистить очередь и отключиться."""
         player: wavelink.Player = ctx.voice_client
         if player:
             player.queue.clear()
             _set_loop(player, LOOP_OFF)
-            await player.stop()
+            try:
+                await player.disconnect()
+            except Exception:
+                pass
             await ctx.send("⏹️ Стоп. Очередь очищена.")
         else:
             await ctx.send("❌ Не в канале.")
@@ -640,6 +655,26 @@ class MusicCog(commands.Cog):
 
         embed.set_footer(text="Префикс: a!  •  Приятного прослушивания! 🎶")
         await ctx.send(embed=embed)
+
+
+# ─────────────────────────────────────────────
+#  Глобальный обработчик ошибок команд
+# ─────────────────────────────────────────────
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return  # Игнорируем неизвестные команды
+    if isinstance(error, commands.MissingRequiredArgument):
+        return await ctx.send(f"❌ Не хватает аргумента: `{error.param.name}`")
+    if isinstance(error, commands.CommandInvokeError):
+        cause = error.original
+        if "LavalinkException" in type(cause).__name__ or "wavelink" in type(cause).__module__:
+            return await ctx.send(
+                "❌ **Ошибка Lavalink:** нода потеряла сессию или недоступна.\n"
+                "Попробуй `a!leave`, затем `a!play` снова."
+            )
+        await ctx.send(f"❌ Ошибка выполнения команды: `{cause}`")
+        raise error  # Логируем в консоль
 
 
 # ─────────────────────────────────────────────
