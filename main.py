@@ -5,6 +5,20 @@ import os
 from dotenv import load_dotenv
 import asyncio
 import random
+import logging
+
+# ─────────────────────────────────────────────
+#  Логгер
+# ─────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="[%(asctime)s] [%(levelname)-7s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("MusicBot")
+# Приглушаем шум от discord.py и wavelink чтобы наши логи были заметны
+logging.getLogger("discord").setLevel(logging.WARNING)
+logging.getLogger("wavelink").setLevel(logging.DEBUG)  # wavelink оставляем DEBUG — он полезен
 
 # Загрузка переменных
 load_dotenv()
@@ -73,52 +87,79 @@ class MusicCog(commands.Cog):
         await self.bot.wait_until_ready()
         nodes_data = [
             {"id": "Hatry-Node",   "uri": "http://lavahatry4.techbyte.host:3000",   "pwd": "naig.is-a.dev"},
+            {"id": "Jirayu-Node",  "uri": "http://lavalink.jirayu.net:13592",       "pwd": "youshallnotpass"},
+            {"id": "FreeLava-1",   "uri": "http://lavalink1.oops.wtf:80",           "pwd": "www.freelavalink.ga"},
+            {"id": "FreeLava-2",   "uri": "http://lavalink.lexnet.cc:2333",         "pwd": "lexn3tl@val!nk"},
         ]
         wavelink_nodes = [
             wavelink.Node(identifier=n["id"], uri=n["uri"], password=n["pwd"])
             for n in nodes_data
         ]
-        print(f"🔄 Подключаемся к {len(wavelink_nodes)} серверам...")
+        log.info(f"🔄 Подключаемся к {len(wavelink_nodes)} серверам...")
         connected = 0
         for node in wavelink_nodes:
             try:
+                log.debug(f"Пробуем ноду {node.identifier} → {node.uri}")
                 await wavelink.Pool.connect(nodes=[node], client=self.bot, cache_capacity=100)
                 connected += 1
+                log.info(f"✅ Нода {node.identifier} подключена")
             except Exception as e:
-                print(f"⚠️ Нода {node.identifier} недоступна: {e}")
+                log.warning(f"⚠️ Нода {node.identifier} недоступна: {e}")
         if connected == 0:
-            print("❌ Ни одна нода не подключилась! Музыка работать не будет.")
+            log.critical("❌ Ни одна нода не подключилась! Музыка работать не будет.")
         else:
-            print(f"✅ Подключено нод: {connected}/{len(wavelink_nodes)}")
+            log.info(f"✅ Подключено нод: {connected}/{len(wavelink_nodes)}")
 
     # ── события ──────────────────────────────
 
     @commands.Cog.listener()
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload):
-        print(f"✅ Нода '{payload.node.identifier}' готова!")
+        log.info(f"✅ Нода '{payload.node.identifier}' готова! URI: {payload.node.uri}")
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_start(self, payload: wavelink.TrackStartEventPayload):
+        t = payload.track
+        log.info(f"▶️  TRACK START | '{t.title}' by {t.author} | длина={t.length}ms | uri={t.uri}")
 
     @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload):
         player = payload.player
+        t = payload.track
+        log.info(f"⏹️  TRACK END   | '{t.title}' | reason={payload.reason} | queue_size={len(player.queue) if player else '?'}")
+
         if not player:
+            log.warning("track_end: player is None, пропускаем")
             return
 
         loop = _get_loop(player)
+        log.debug(f"track_end: loop_mode={loop}")
 
         if loop == LOOP_TRACK:
-            # Повторяем тот же трек
+            log.debug("track_end: повторяем трек")
             await player.play(payload.track)
 
         elif loop == LOOP_QUEUE:
-            # Кладём завершённый трек в конец очереди и берём следующий
             player.queue.put(payload.track)
             if not player.queue.is_empty:
-                await player.play(player.queue.get())
+                next_track = player.queue.get()
+                log.debug(f"track_end: loop_queue → играем '{next_track.title}'")
+                await player.play(next_track)
 
         else:
-            # Обычное воспроизведение следующего
             if not player.queue.is_empty:
-                await player.play(player.queue.get())
+                next_track = player.queue.get()
+                log.debug(f"track_end: играем следующий → '{next_track.title}'")
+                await player.play(next_track)
+            else:
+                log.info("track_end: очередь пуста, воспроизведение остановлено")
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_exception(self, payload: wavelink.TrackExceptionEventPayload):
+        log.error(f"💥 TRACK EXCEPTION | трек='{payload.track.title}' | ошибка: {payload.exception}")
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_stuck(self, payload: wavelink.TrackStuckEventPayload):
+        log.error(f"🔁 TRACK STUCK     | трек='{payload.track.title}' | threshold={payload.threshold}ms")
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
@@ -167,22 +208,31 @@ class MusicCog(commands.Cog):
     @commands.command(name='play', aliases=['p'])
     async def play(self, ctx, *, query: str):
         """Найти и воспроизвести трек или плейлист."""
+        log.info(f"▶  play | user={ctx.author} | query='{query}'")
+
         try:
-            wavelink.Pool.get_node()
+            node = wavelink.Pool.get_node()
+            log.debug(f"play: используем ноду '{node.identifier}' | status={node.status}")
         except wavelink.InvalidNodeException:
+            log.error("play: нет доступных нод!")
             return await ctx.send("⚠️ Серверы ещё подключаются. Подождите немного.")
 
         if not ctx.voice_client:
             if ctx.author.voice:
+                log.debug(f"play: подключаемся к каналу '{ctx.author.voice.channel}'")
                 try:
                     await ctx.author.voice.channel.connect(cls=wavelink.Player)
+                    log.info(f"play: подключились к '{ctx.author.voice.channel}'")
                 except Exception as e:
+                    log.error(f"play: ошибка подключения к каналу: {e}", exc_info=True)
                     return await ctx.send(f"❌ Ошибка подключения: {e}")
             else:
                 return await ctx.send("❌ Зайдите в голосовой канал!")
 
         player: wavelink.Player = ctx.voice_client
         player.autoplay = wavelink.AutoPlayMode.disabled
+
+        log.debug(f"play: player.current={player.current} | player.playing={player.playing} | queue={len(player.queue)}")
 
         await ctx.send(f"🔍 Ищу: `{query}`...")
         try:
@@ -191,43 +241,51 @@ class MusicCog(commands.Cog):
                 if query.startswith("http")
                 else await wavelink.Playable.search(query, source=wavelink.TrackSource.SoundCloud)
             )
+            log.debug(f"play: поиск вернул {type(tracks).__name__}, count={len(tracks) if tracks else 0}")
         except Exception as e:
+            log.error(f"play: ошибка поиска: {e}", exc_info=True)
             return await ctx.send(f"❌ Ошибка поиска: {e}")
 
         if not tracks:
+            log.warning(f"play: ничего не найдено для '{query}'")
             return await ctx.send("😕 Ничего не найдено.")
 
-        # Определяем: играет ли сейчас что-то
-        # player.current надёжнее чем player.playing в wavelink 3.x
         is_playing = player.current is not None
+        log.debug(f"play: is_playing={is_playing}")
 
         if isinstance(tracks, wavelink.Playlist):
             first_track = None
             for i, track in enumerate(tracks):
                 if i == 0 and not is_playing:
-                    first_track = track  # первый трек играем сразу
+                    first_track = track
                 else:
                     player.queue.put(track)
             msg = f"📃 Добавлен плейлист **{tracks.name}** ({len(tracks)} треков)."
             if first_track:
+                log.info(f"play: запускаем первый трек плейлиста '{first_track.title}'")
                 try:
                     await player.play(first_track)
+                    log.info(f"play: player.play() вызван успешно")
                     await ctx.send(msg)
                 except Exception as e:
+                    log.error(f"play: player.play() упал: {e}", exc_info=True)
                     await ctx.send(f"❌ Не могу воспроизвести: `{e}`")
             else:
                 await ctx.send(msg)
         else:
             track = tracks[0]
+            log.info(f"play: найден трек '{track.title}' by '{track.author}' | длина={track.length}ms | uri={track.uri}")
             if not is_playing:
-                # Ничего не играет → запускаем сразу
+                log.info(f"play: ничего не играет → вызываем player.play()")
                 try:
                     await player.play(track)
+                    log.info(f"play: player.play() вызван успешно | player.current после={player.current}")
                     await ctx.send(f"▶️ Играю: **{track.title}** — *{track.author}*")
                 except Exception as e:
+                    log.error(f"play: player.play() упал: {e}", exc_info=True)
                     await ctx.send(f"❌ Не могу воспроизвести: `{e}`")
             else:
-                # Уже играет → в очередь
+                log.info(f"play: уже играет → добавляем в очередь")
                 player.queue.put(track)
                 pos = len(player.queue)
                 await ctx.send(f"🎵 **{track.title}** — *{track.author}* добавлен в очередь (позиция {pos}).")
