@@ -343,16 +343,14 @@ class MusicCog(commands.Cog):
                     log.info(f"play: player.play() вызван | player.current={player.current}")
                     await ctx.send(f"▶️ Играю: **{track.title}** — *{track.author}* [источник: {source_used}]")
 
-                    # Через 5 сек проверяем — если тихий сбой, делаем retry через YouTube Music
                     original_title  = track.title
                     original_author = track.author
 
                     async def _check_and_retry():
                         await asyncio.sleep(5)
 
-                        # Если трек уже играет — всё хорошо
                         if player.playing and player.current:
-                            log.debug("_check_and_retry: трек играет, всё ок")
+                            log.debug("_check_and_retry: трек играет ✅")
                             return
 
                         log.error(
@@ -360,42 +358,60 @@ class MusicCog(commands.Cog):
                             f"player.current={player.current} через 5 сек"
                         )
 
-                        # Пробуем найти тот же трек через YouTube Music
-                        retry_query = f"{original_author} {original_title}"
-                        log.info(f"RETRY: ищем через YouTube Music → '{retry_query}'")
-                        await ctx.send(
-                            f"⚠️ Нода не смогла воспроизвести трек напрямую.\n"
-                            f"🔄 Пробую найти через **YouTube Music**: `{retry_query}`..."
-                        )
+                        await ctx.send("⚠️ Нода не смогла воспроизвести. Пробую другие источники и ноды...")
 
-                        retry_track = None
-                        for source, label in [
+                        retry_query = f"{original_author} {original_title}"
+
+                        # Все доступные ноды
+                        all_nodes = list(wavelink.Pool.nodes.values())
+                        log.info(f"RETRY: доступно нод: {[n.identifier for n in all_nodes]}")
+
+                        # Все источники для retry
+                        retry_sources = [
                             (wavelink.TrackSource.YouTubeMusic, "YouTube Music"),
                             (wavelink.TrackSource.YouTube,      "YouTube"),
-                        ]:
-                            try:
-                                results = await wavelink.Playable.search(retry_query, source=source)
-                                if results:
-                                    retry_track = results[0]
-                                    log.info(f"RETRY: найдено через {label} → '{retry_track.title}'")
-                                    await ctx.send(f"✅ Нашёл через **{label}**: **{retry_track.title}**")
-                                    break
-                            except Exception as e:
-                                log.warning(f"RETRY: {label} упал: {e}")
+                        ]
 
-                        if retry_track:
-                            try:
-                                await player.play(retry_track)
-                                log.info(f"RETRY: player.play() вызван для '{retry_track.title}'")
-                            except Exception as e:
-                                log.error(f"RETRY: player.play() упал: {e}", exc_info=True)
-                                await ctx.send(f"❌ Повторная попытка тоже не удалась: `{e}`")
-                        else:
-                            log.error("RETRY: ничего не найдено ни через YTMusic ни через YT")
-                            await ctx.send(
-                                "❌ **Не удалось воспроизвести ни одним способом.**\n"
-                                "Попробуй вставить прямую ссылку на YouTube."
-                            )
+                        for node in all_nodes:
+                            if not node.is_connected():
+                                log.warning(f"RETRY: нода {node.identifier} не подключена, пропускаем")
+                                continue
+
+                            for source, label in retry_sources:
+                                try:
+                                    log.info(f"RETRY: нода={node.identifier} | источник={label} | запрос='{retry_query}'")
+                                    results = await wavelink.Playable.search(retry_query, source=source)
+                                    if not results:
+                                        log.warning(f"RETRY: {label} вернул пустой список")
+                                        continue
+
+                                    retry_track = results[0]
+                                    log.info(f"RETRY: найден трек '{retry_track.title}' через {label} на ноде {node.identifier}")
+
+                                    # Переключаем плеер на эту ноду
+                                    await player.move_to(node)
+                                    await asyncio.sleep(1)  # дать время переключиться
+                                    await player.play(retry_track)
+
+                                    # Снова ждём и проверяем
+                                    await asyncio.sleep(5)
+                                    if player.playing and player.current:
+                                        await ctx.send(f"✅ Заработало через **{label}** (нода: `{node.identifier}`): **{retry_track.title}**")
+                                        log.info(f"RETRY: успех на {node.identifier} / {label}")
+                                        return
+                                    else:
+                                        log.warning(f"RETRY: нода {node.identifier} + {label} тоже тихий сбой")
+
+                                except Exception as e:
+                                    log.warning(f"RETRY: нода={node.identifier} + {label} упал: {e}")
+
+                        # Ничего не помогло
+                        log.error("RETRY: все ноды и источники исчерпаны")
+                        await ctx.send(
+                            "❌ **Ни одна нода не смогла воспроизвести трек.**\n"
+                            "Все публичные Lavalink-серверы могут блокировать этот источник.\n"
+                            "Попробуй вставить прямую ссылку на YouTube."
+                        )
 
                     asyncio.create_task(_check_and_retry())
 
