@@ -373,7 +373,7 @@ class MusicCog(commands.Cog):
                         log.info(f"RETRY: доступно нод: {[n.identifier for n in all_nodes]}")
 
                         for node in all_nodes:
-                            if not node.is_connected():
+                            if node.status != wavelink.NodeStatus.CONNECTED:
                                 log.warning(f"RETRY: нода {node.identifier} не подключена, пропускаем")
                                 continue
 
