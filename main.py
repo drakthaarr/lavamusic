@@ -347,37 +347,40 @@ class MusicCog(commands.Cog):
                     original_author = track.author
 
                     async def _check_and_retry():
-                        await asyncio.sleep(5)
+                        # Ждём 4 сек и запоминаем позицию
+                        await asyncio.sleep(4)
+                        pos1 = player.position
+                        log.debug(f"_check_and_retry: позиция через 4 сек = {pos1}ms")
 
-                        if player.playing and player.current:
-                            log.debug("_check_and_retry: трек играет ✅")
+                        # Ждём ещё 3 сек и смотрим — двинулась ли позиция
+                        await asyncio.sleep(3)
+                        pos2 = player.position
+                        log.debug(f"_check_and_retry: позиция через 7 сек = {pos2}ms")
+
+                        if pos2 > pos1 and pos2 > 0:
+                            log.info(f"_check_and_retry: трек реально играет ✅ ({pos1}ms → {pos2}ms)")
                             return
 
                         log.error(
-                            f"ТИХИЙ СБОЙ: player.playing={player.playing} | "
-                            f"player.current={player.current} через 5 сек"
+                            f"ТИХИЙ СБОЙ: позиция не двигается ({pos1}ms → {pos2}ms) | "
+                            f"player.playing={player.playing} | player.current={player.current}"
                         )
 
-                        await ctx.send("⚠️ Нода не смогла воспроизвести. Пробую другие источники и ноды...")
+                        await ctx.send("⚠️ Нода не воспроизводит. Пробую другие источники и ноды...")
 
                         retry_query = f"{original_author} {original_title}"
-
-                        # Все доступные ноды
                         all_nodes = list(wavelink.Pool.nodes.values())
                         log.info(f"RETRY: доступно нод: {[n.identifier for n in all_nodes]}")
-
-                        # Все источники для retry
-                        retry_sources = [
-                            (wavelink.TrackSource.YouTubeMusic, "YouTube Music"),
-                            (wavelink.TrackSource.YouTube,      "YouTube"),
-                        ]
 
                         for node in all_nodes:
                             if not node.is_connected():
                                 log.warning(f"RETRY: нода {node.identifier} не подключена, пропускаем")
                                 continue
 
-                            for source, label in retry_sources:
+                            for source, label in [
+                                (wavelink.TrackSource.YouTubeMusic, "YouTube Music"),
+                                (wavelink.TrackSource.YouTube,      "YouTube"),
+                            ]:
                                 try:
                                     log.info(f"RETRY: нода={node.identifier} | источник={label} | запрос='{retry_query}'")
                                     results = await wavelink.Playable.search(retry_query, source=source)
@@ -386,26 +389,28 @@ class MusicCog(commands.Cog):
                                         continue
 
                                     retry_track = results[0]
-                                    log.info(f"RETRY: найден трек '{retry_track.title}' через {label} на ноде {node.identifier}")
+                                    log.info(f"RETRY: найден '{retry_track.title}' через {label} на ноде {node.identifier}")
 
-                                    # Переключаем плеер на эту ноду
                                     await player.move_to(node)
-                                    await asyncio.sleep(1)  # дать время переключиться
+                                    await asyncio.sleep(1)
                                     await player.play(retry_track)
 
-                                    # Снова ждём и проверяем
-                                    await asyncio.sleep(5)
-                                    if player.playing and player.current:
+                                    # Проверяем позицию снова
+                                    await asyncio.sleep(4)
+                                    p1 = player.position
+                                    await asyncio.sleep(3)
+                                    p2 = player.position
+
+                                    if p2 > p1 and p2 > 0:
                                         await ctx.send(f"✅ Заработало через **{label}** (нода: `{node.identifier}`): **{retry_track.title}**")
-                                        log.info(f"RETRY: успех на {node.identifier} / {label}")
+                                        log.info(f"RETRY: успех на {node.identifier} / {label} ✅")
                                         return
                                     else:
-                                        log.warning(f"RETRY: нода {node.identifier} + {label} тоже тихий сбой")
+                                        log.warning(f"RETRY: {node.identifier} + {label} — позиция всё равно не двигается ({p1} → {p2})")
 
                                 except Exception as e:
                                     log.warning(f"RETRY: нода={node.identifier} + {label} упал: {e}")
 
-                        # Ничего не помогло
                         log.error("RETRY: все ноды и источники исчерпаны")
                         await ctx.send(
                             "❌ **Ни одна нода не смогла воспроизвести трек.**\n"
