@@ -262,10 +262,19 @@ class MusicCog(commands.Cog):
                 log.debug(f"play: подключаемся к каналу '{ctx.author.voice.channel}'")
                 try:
                     await ctx.author.voice.channel.connect(cls=wavelink.Player)
-                    log.info(f"play: подключились к '{ctx.author.voice.channel}'")
                 except Exception as e:
                     log.error(f"play: ошибка подключения к каналу: {e}", exc_info=True)
                     return await ctx.send(f"❌ Ошибка подключения: {e}")
+
+                # Ждём пока voice_client реально появится и VOICE_UPDATE пройдёт
+                for _ in range(20):
+                    if ctx.voice_client and ctx.voice_client.channel:
+                        break
+                    await asyncio.sleep(0.2)
+                else:
+                    return await ctx.send("❌ Не удалось установить голосовое соединение.")
+
+                log.info(f"play: голосовое соединение готово → '{ctx.voice_client.channel}'")
             else:
                 return await ctx.send("❌ Зайдите в голосовой канал!")
 
