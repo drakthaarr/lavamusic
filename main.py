@@ -156,6 +156,20 @@ class MusicCog(commands.Cog):
     @commands.Cog.listener()
     async def on_wavelink_track_exception(self, payload: wavelink.TrackExceptionEventPayload):
         log.error(f"💥 TRACK EXCEPTION | трек='{payload.track.title}' | ошибка: {payload.exception}")
+        player: wavelink.Player = payload.player
+        if not player:
+            return
+        # Сохраняем канал для уведомления
+        channel = getattr(player, "_text_channel", None)
+        if channel:
+            await channel.send(
+                f"💥 Нода не смогла загрузить трек **{payload.track.title}**.\n"
+                f"Причина: `{payload.exception}`\n"
+                f"Попробую следующий трек..."
+            )
+        # Пробуем следующий в очереди
+        if not player.queue.is_empty:
+            await player.play(player.queue.get())
 
     @commands.Cog.listener()
     async def on_wavelink_track_stuck(self, payload: wavelink.TrackStuckEventPayload):
@@ -231,24 +245,45 @@ class MusicCog(commands.Cog):
 
         player: wavelink.Player = ctx.voice_client
         player.autoplay = wavelink.AutoPlayMode.disabled
+        player._text_channel = ctx.channel  # сохраняем для уведомлений из событий
 
         log.debug(f"play: player.current={player.current} | player.playing={player.playing} | queue={len(player.queue)}")
 
         await ctx.send(f"🔍 Ищу: `{query}`...")
-        try:
-            tracks = (
-                await wavelink.Playable.search(query)
-                if query.startswith("http")
-                else await wavelink.Playable.search(query, source=wavelink.TrackSource.SoundCloud)
-            )
-            log.debug(f"play: поиск вернул {type(tracks).__name__}, count={len(tracks) if tracks else 0}")
-        except Exception as e:
-            log.error(f"play: ошибка поиска: {e}", exc_info=True)
-            return await ctx.send(f"❌ Ошибка поиска: {e}")
+
+        # Цепочка источников: если один не даёт результат — пробуем следующий
+        tracks = None
+        source_used = None
+
+        if query.startswith("http"):
+            # Прямая ссылка — ищем как есть
+            try:
+                tracks = await wavelink.Playable.search(query)
+                source_used = "URL"
+                log.debug(f"play: URL-поиск вернул {len(tracks) if tracks else 0} результатов")
+            except Exception as e:
+                log.error(f"play: URL-поиск упал: {e}", exc_info=True)
+        else:
+            # Текстовый запрос — пробуем SoundCloud, потом YouTube
+            for source, label in [
+                (wavelink.TrackSource.SoundCloud, "SoundCloud"),
+                (wavelink.TrackSource.YouTube,    "YouTube"),
+            ]:
+                try:
+                    results = await wavelink.Playable.search(query, source=source)
+                    if results:
+                        tracks = results
+                        source_used = label
+                        log.info(f"play: найдено через {label}: {len(tracks)} результатов")
+                        break
+                    else:
+                        log.warning(f"play: {label} вернул пустой список")
+                except Exception as e:
+                    log.warning(f"play: {label} упал с ошибкой: {e}")
 
         if not tracks:
-            log.warning(f"play: ничего не найдено для '{query}'")
-            return await ctx.send("😕 Ничего не найдено.")
+            log.warning(f"play: ничего не найдено для '{query}' ни в одном источнике")
+            return await ctx.send("😕 Ничего не найдено ни на SoundCloud, ни на YouTube.")
 
         is_playing = player.current is not None
         log.debug(f"play: is_playing={is_playing}")
@@ -280,7 +315,21 @@ class MusicCog(commands.Cog):
                 try:
                     await player.play(track)
                     log.info(f"play: player.play() вызван успешно | player.current после={player.current}")
-                    await ctx.send(f"▶️ Играю: **{track.title}** — *{track.author}*")
+                    await ctx.send(f"▶️ Играю: **{track.title}** — *{track.author}* [источник: {source_used}]")
+
+                    # Проверяем через 5 сек — вдруг нода тихо упала
+                    async def _check_started():
+                        await asyncio.sleep(5)
+                        if player.current and not player.playing:
+                            log.error(f"play: ТИХИЙ СБОЙ — player.current='{player.current}' но player.playing=False через 5 сек!")
+                            await ctx.send(
+                                "⚠️ **Трек не воспроизводится** — нода приняла запрос, но аудио не идёт.\n"
+                                "Возможно, нода не поддерживает этот источник. Попробуй `a!play` с YouTube-ссылкой."
+                            )
+                        elif not player.current:
+                            log.error("play: ТИХИЙ СБОЙ — player.current=None через 5 сек после play()")
+                    asyncio.create_task(_check_started())
+
                 except Exception as e:
                     log.error(f"play: player.play() упал: {e}", exc_info=True)
                     await ctx.send(f"❌ Не могу воспроизвести: `{e}`")
