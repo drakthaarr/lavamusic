@@ -70,34 +70,29 @@ class MusicCog(commands.Cog):
         self.bot = bot
 
     async def setup_nodes(self):
-        """Подключаемся к нодам."""
         await self.bot.wait_until_ready()
-        
-        # Список нод (Non-SSL, HTTP) - тот, который у тебя заработал
         nodes_data = [
-            {
-                "id": "Hatry-Node",
-                "uri": "http://lavahatry4.techbyte.host:3000",
-                "pwd": "naig.is-a.dev"
-            },
-            {
-                "id": "Jirayu-Node",
-                "uri": "http://lavalink.jirayu.net:13592",
-                "pwd": "youshallnotpass"
-            },
+            {"id": "Hatry-Node",   "uri": "http://lavahatry4.techbyte.host:3000",   "pwd": "naig.is-a.dev"},
+            {"id": "Jirayu-Node",  "uri": "http://lavalink.jirayu.net:13592",       "pwd": "youshallnotpass"},
+            {"id": "FreeLava-1",   "uri": "http://lavalink1.oops.wtf:80",           "pwd": "www.freelavalink.ga"},
+            {"id": "FreeLava-2",   "uri": "http://lavalink.lexnet.cc:2333",         "pwd": "lexn3tl@val!nk"},
         ]
-
-        # Создаем объекты нод
-        wavelink_nodes = []
-        for n in nodes_data:
-            wavelink_nodes.append(wavelink.Node(identifier=n["id"], uri=n["uri"], password=n["pwd"]))
-
-        # Пытаемся подключиться
-        print(f"🔄 Попытка подключения к {len(wavelink_nodes)} HTTP серверам...")
-        try:
-            await wavelink.Pool.connect(nodes=wavelink_nodes, client=self.bot, cache_capacity=100)
-        except Exception as e:
-            print(f"Инициализация пула завершена (ошибки подключения ожидаемы): {e}")
+        wavelink_nodes = [
+            wavelink.Node(identifier=n["id"], uri=n["uri"], password=n["pwd"])
+            for n in nodes_data
+        ]
+        print(f"🔄 Подключаемся к {len(wavelink_nodes)} серверам...")
+        connected = 0
+        for node in wavelink_nodes:
+            try:
+                await wavelink.Pool.connect(nodes=[node], client=self.bot, cache_capacity=100)
+                connected += 1
+            except Exception as e:
+                print(f"⚠️ Нода {node.identifier} недоступна: {e}")
+        if connected == 0:
+            print("❌ Ни одна нода не подключилась! Музыка работать не будет.")
+        else:
+            print(f"✅ Подключено нод: {connected}/{len(wavelink_nodes)}")
 
     # ── события ──────────────────────────────
 
@@ -205,20 +200,40 @@ class MusicCog(commands.Cog):
         if not tracks:
             return await ctx.send("😕 Ничего не найдено.")
 
+        # Определяем: играет ли сейчас что-то
+        # player.current надёжнее чем player.playing в wavelink 3.x
+        is_playing = player.current is not None
+
         if isinstance(tracks, wavelink.Playlist):
-            for track in tracks:
-                player.queue.put(track)
-            await ctx.send(f"📃 Добавлен плейлист **{tracks.name}** ({len(tracks)} треков).")
+            first_track = None
+            for i, track in enumerate(tracks):
+                if i == 0 and not is_playing:
+                    first_track = track  # первый трек играем сразу
+                else:
+                    player.queue.put(track)
+            msg = f"📃 Добавлен плейлист **{tracks.name}** ({len(tracks)} треков)."
+            if first_track:
+                try:
+                    await player.play(first_track)
+                    await ctx.send(msg)
+                except Exception as e:
+                    await ctx.send(f"❌ Не могу воспроизвести: `{e}`")
+            else:
+                await ctx.send(msg)
         else:
             track = tracks[0]
-            player.queue.put(track)
-            await ctx.send(f"🎵 **{track.title}** — *{track.author}* добавлен в очередь.")
-
-        if not player.playing:
-            try:
-                await player.play(player.queue.get())
-            except Exception as e:
-                await ctx.send(f"❌ Не могу воспроизвести: `{e}`\nВозможно, нода Lavalink недоступна. Попробуй другой трек или подождите.")
+            if not is_playing:
+                # Ничего не играет → запускаем сразу
+                try:
+                    await player.play(track)
+                    await ctx.send(f"▶️ Играю: **{track.title}** — *{track.author}*")
+                except Exception as e:
+                    await ctx.send(f"❌ Не могу воспроизвести: `{e}`")
+            else:
+                # Уже играет → в очередь
+                player.queue.put(track)
+                pos = len(player.queue)
+                await ctx.send(f"🎵 **{track.title}** — *{track.author}* добавлен в очередь (позиция {pos}).")
 
     # ── playskip ─────────────────────────────
 
@@ -245,7 +260,7 @@ class MusicCog(commands.Cog):
         track = tracks[0] if not isinstance(tracks, wavelink.Playlist) else tracks[0]
         # Вставляем в начало очереди
         player.queue.put_at(0, track)
-        if player.playing:
+        if player.current is not None:
             await player.skip(force=True)
         else:
             await player.play(player.queue.get())
@@ -288,7 +303,7 @@ class MusicCog(commands.Cog):
     async def skip(self, ctx, amount: int = 1):
         """Пропустить `amount` треков (по умолчанию 1)."""
         player: wavelink.Player = ctx.voice_client
-        if not player or not player.playing:
+        if not player or player.current is None:
             return await ctx.send("❌ Ничего не играет.")
 
         # При пропуске снимаем loop_track, чтобы не застрять
@@ -314,7 +329,7 @@ class MusicCog(commands.Cog):
     async def pause(self, ctx):
         """Поставить на паузу."""
         player: wavelink.Player = ctx.voice_client
-        if not player or not player.playing:
+        if not player or player.current is None:
             return await ctx.send("❌ Ничего не играет.")
         if player.paused:
             return await ctx.send("Уже на паузе. Используй `a!resume`.")
@@ -371,7 +386,7 @@ class MusicCog(commands.Cog):
     async def nowplaying(self, ctx):
         """Показать текущий трек с прогресс-баром."""
         player: wavelink.Player = ctx.voice_client
-        if not player or not player.playing:
+        if not player or player.current is None:
             return await ctx.send("❌ Ничего не играет.")
 
         track = player.current
@@ -406,7 +421,7 @@ class MusicCog(commands.Cog):
     async def queue_cmd(self, ctx, page: int = 1):
         """Показать очередь (10 треков на страницу)."""
         player: wavelink.Player = ctx.voice_client
-        if not player or (player.queue.is_empty and not player.playing):
+        if not player or (player.queue.is_empty and player.current is None):
             return await ctx.send("📭 Очередь пуста.")
 
         per_page = 10
@@ -422,7 +437,7 @@ class MusicCog(commands.Cog):
         loop = _get_loop(player)
         status = f" | {LOOP_LABELS[loop]}" if loop != LOOP_OFF else ""
 
-        if player.playing:
+        if player.current is not None:
             embed.add_field(
                 name=f"▶️ Сейчас{status}",
                 value=f"**{player.current.title}** — *{player.current.author}*",
@@ -503,7 +518,7 @@ class MusicCog(commands.Cog):
         Перемотать трек. Формат: `1:30` (мин:сек) или `90` (секунды).
         """
         player: wavelink.Player = ctx.voice_client
-        if not player or not player.playing:
+        if not player or player.current is None:
             return await ctx.send("❌ Ничего не играет.")
 
         try:
