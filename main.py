@@ -70,35 +70,34 @@ class MusicCog(commands.Cog):
         self.bot = bot
 
     async def setup_nodes(self):
+        """Подключаемся к нодам."""
         await self.bot.wait_until_ready()
+        
+        # Список нод (Non-SSL, HTTP) - тот, который у тебя заработал
         nodes_data = [
-                    {
-                    "id": "Hatry-Node",
-                    "uri": "http://lavahatry4.techbyte.host:3000",
-                    "pwd": "naig.is-a.dev"
-                    },
-                    {
-                    "id": "Jirayu-Node",
-                    "uri": "http://lavalink.jirayu.net:13592",
-                    "pwd": "youshallnotpass"
-                    },
-                ] 
-        wavelink_nodes = [
-            wavelink.Node(identifier=n["id"], uri=n["uri"], password=n["pwd"])
-            for n in nodes_data
+            {
+                "id": "Hatry-Node",
+                "uri": "http://lavahatry4.techbyte.host:3000",
+                "pwd": "naig.is-a.dev"
+            },
+            {
+                "id": "Jirayu-Node",
+                "uri": "http://lavalink.jirayu.net:13592",
+                "pwd": "youshallnotpass"
+            },
         ]
-        print(f"🔄 Подключаемся к {len(wavelink_nodes)} серверам...")
-        connected = 0
-        for node in wavelink_nodes:
-            try:
-                await wavelink.Pool.connect(nodes=[node], client=self.bot, cache_capacity=100)
-                connected += 1
-            except Exception as e:
-                print(f"⚠️ Нода {node.identifier} недоступна: {e}")
-        if connected == 0:
-            print("❌ Ни одна нода не подключилась! Музыка работать не будет.")
-        else:
-            print(f"✅ Подключено нод: {connected}/{len(wavelink_nodes)}")
+
+        # Создаем объекты нод
+        wavelink_nodes = []
+        for n in nodes_data:
+            wavelink_nodes.append(wavelink.Node(identifier=n["id"], uri=n["uri"], password=n["pwd"]))
+
+        # Пытаемся подключиться
+        print(f"🔄 Попытка подключения к {len(wavelink_nodes)} HTTP серверам...")
+        try:
+            await wavelink.Pool.connect(nodes=wavelink_nodes, client=self.bot, cache_capacity=100)
+        except Exception as e:
+            print(f"Инициализация пула завершена (ошибки подключения ожидаемы): {e}")
 
     # ── события ──────────────────────────────
 
