@@ -86,6 +86,7 @@ class MusicCog(commands.Cog):
     async def setup_nodes(self):
         await self.bot.wait_until_ready()
         nodes_data = [
+            {"id": "Serenetia",    "uri": "http://lavalinkv4.serenetia.com:80",      "pwd": "https://seretia.link/discord"},
             {"id": "Hatry-Node",   "uri": "http://lavahatry4.techbyte.host:3000",   "pwd": "naig.is-a.dev"},
             {"id": "Jirayu-Node",  "uri": "http://lavalink.jirayu.net:13592",       "pwd": "youshallnotpass"},
             {"id": "FreeLava-1",   "uri": "http://lavalink1.oops.wtf:80",           "pwd": "www.freelavalink.ga"},
